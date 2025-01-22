@@ -5,6 +5,8 @@ import (
 	"math"
 
 	"auto_trade/trading"
+
+	"github.com/google/uuid"
 )
 
 // StrategyType represents the type of trading strategy
@@ -28,8 +30,8 @@ type MartingaleStrategy struct {
 
 // NewMartingaleStrategy creates a new instance of the Martingale strategy
 func NewMartingaleStrategy(baseSize float64, symbol string, maxLosses int) *MartingaleStrategy {
-	// Create a unique strategy ID that includes key parameters
-	strategyID := fmt.Sprintf("MART-%s-%.2f-%d", symbol, baseSize, maxLosses)
+	// Create a unique strategy ID
+	strategyID := fmt.Sprintf("MART-%s", uuid.New().String())
 	
 	return &MartingaleStrategy{
 		StrategyID:   strategyID,

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type TradeType string
@@ -26,7 +28,6 @@ type TradeManager struct {
 	trades     map[string]*Trade // All trades
 	openTrades map[string]*Trade // Only open trades
 	mutex      sync.RWMutex
-	count      int
 }
 
 func NewTradeManager() *TradeManager {
@@ -40,8 +41,7 @@ func (tm *TradeManager) PlaceBuyOrder(symbol string, price float64) (*Trade, err
 	tm.mutex.Lock()
 	defer tm.mutex.Unlock()
 
-	tm.count++
-	tradeID := fmt.Sprintf("TRADE-%d", tm.count)
+	tradeID := fmt.Sprintf("TRADE-%s", uuid.New().String())
 
 	trade := &Trade{
 		ID:        tradeID,
