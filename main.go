@@ -14,13 +14,26 @@ func main() {
 	chatHub := websocket.NewHub()
 	go chatHub.Run()
 
-	ticksHub := websocket.NewTicksHub()
-	go ticksHub.Run()
-
 	// Initialize trade manager and handlers
 	tradeManager := trading.NewTradeManager()
 	tradeHandler := handlers.NewTradeHandler()
 	tradeHandler.TradeManager = tradeManager
+	
+	// Initialize strategy handler and ticks handler
+	strategyExecutor := handlers.InitStrategyHandler(tradeManager)
+	strategyTicksHandler := websocket.NewStrategyTicksHandler(strategyExecutor)
+	
+	// Initialize ticks hub with strategy handler
+	ticksHub := websocket.NewTicksHub(strategyTicksHandler)
+	go ticksHub.Run()
+
+	// Initialize strategy status hubs
+	strategyStatusHub := websocket.NewStrategyStatusHub(strategyExecutor)
+	go strategyStatusHub.Run()
+	go strategyStatusHub.BroadcastActiveStrategies()
+
+	singleStrategyHub := websocket.NewSingleStrategyHub(strategyExecutor)
+	go singleStrategyHub.Run()
 
 	// Initialize trade status hubs
 	tradeStatusHub := websocket.NewTradeStatusHub(tradeManager)
@@ -40,11 +53,19 @@ func main() {
 	})
 	http.HandleFunc("/api/trade/buy", tradeHandler.Buy)
 	http.HandleFunc("/api/trade/sell", tradeHandler.Sell)
+	http.HandleFunc("/api/strategy/start", handlers.StartStrategy)
+	http.HandleFunc("/api/strategy/stop", handlers.StopStrategy)
 	http.HandleFunc("/ws/trades", func(w http.ResponseWriter, r *http.Request) {
 		websocket.ServeAllTradesWs(tradeStatusHub, w, r)
 	})
 	http.HandleFunc("/ws/trade/", func(w http.ResponseWriter, r *http.Request) {
 		websocket.ServeSingleTradeWs(singleTradeHub, w, r)
+	})
+	http.HandleFunc("/ws/strategies", func(w http.ResponseWriter, r *http.Request) {
+		websocket.ServeAllStrategiesWs(strategyStatusHub, w, r)
+	})
+	http.HandleFunc("/ws/strategy/", func(w http.ResponseWriter, r *http.Request) {
+		websocket.ServeSingleStrategyWs(singleStrategyHub, w, r)
 	})
 	
 	// Serve static files
