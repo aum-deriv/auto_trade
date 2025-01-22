@@ -24,6 +24,45 @@ The server will start on port 8080.
 }
 ```
 
+### Place Buy Trade
+- **URL**: `/api/trade/buy`
+- **Method**: `POST`
+- **Request Body**:
+```json
+{
+    "symbol": "BTC/USD"
+}
+```
+- **Response**:
+```json
+{
+    "trade_id": "TRADE-1",
+    "symbol": "BTC/USD",
+    "price": 40000.00,
+    "status": "OPEN"
+}
+```
+- **Supported Symbols**: BTC/USD, ETH/USD, SOL/USD
+
+### Close (Sell) Trade
+- **URL**: `/api/trade/sell`
+- **Method**: `POST`
+- **Request Body**:
+```json
+{
+    "trade_id": "TRADE-1"
+}
+```
+- **Response**:
+```json
+{
+    "trade_id": "TRADE-1",
+    "symbol": "BTC/USD",
+    "price": 40000.00,
+    "status": "CLOSED"
+}
+```
+
 ### Chat WebSocket
 - **URL**: `ws://localhost:8080/ws`
 - **Protocol**: `WebSocket`
@@ -43,6 +82,40 @@ The server will start on port 8080.
 }
 ```
 
+### Open Trades WebSocket
+- **URL**: `ws://localhost:8080/ws/trades`
+- **Protocol**: `WebSocket`
+- **Description**: Streams real-time updates of all open trades
+- **Data Format**:
+```json
+[
+    {
+        "id": "TRADE-1",
+        "symbol": "BTC/USD",
+        "type": "BUY",
+        "price": 40000.00,
+        "status": "OPEN",
+        "timestamp": "2025-01-22T11:34:00Z"
+    }
+]
+```
+
+### Single Trade WebSocket
+- **URL**: `ws://localhost:8080/ws/trade/{trade_id}`
+- **Protocol**: `WebSocket`
+- **Description**: Streams real-time updates for a specific trade
+- **Data Format**:
+```json
+{
+    "id": "TRADE-1",
+    "symbol": "BTC/USD",
+    "type": "BUY",
+    "price": 40000.00,
+    "status": "OPEN",
+    "timestamp": "2025-01-22T11:34:00Z"
+}
+```
+
 ## Test Pages
 1. Chat Test Page (http://localhost:8080)
    - Connect to the WebSocket server
@@ -55,6 +128,12 @@ The server will start on port 8080.
    - Price changes highlighted in green (up) or red (down)
    - Automatic updates for BTC/USD, ETH/USD, and SOL/USD
    - Auto-reconnect if connection is lost
+
+3. Trade Monitor Page (http://localhost:8080/trades.html)
+   - Real-time monitoring of all open trades
+   - Individual trade monitoring by ID
+   - Automatic updates of trade status
+   - Split view for all trades and single trade monitoring
 
 ## Requirements
 

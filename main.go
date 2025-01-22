@@ -2,6 +2,7 @@ package main
 
 import (
 	"auto_trade/handlers"
+	"auto_trade/trading"
 	"auto_trade/websocket"
 	"fmt"
 	"log"
@@ -16,6 +17,19 @@ func main() {
 	ticksHub := websocket.NewTicksHub()
 	go ticksHub.Run()
 
+	// Initialize trade manager and handlers
+	tradeManager := trading.NewTradeManager()
+	tradeHandler := handlers.NewTradeHandler()
+	tradeHandler.TradeManager = tradeManager
+
+	// Initialize trade status hubs
+	tradeStatusHub := websocket.NewTradeStatusHub(tradeManager)
+	go tradeStatusHub.Run()
+	go tradeStatusHub.BroadcastOpenTrades()
+
+	singleTradeHub := websocket.NewSingleTradeHub(tradeManager)
+	go singleTradeHub.Run()
+
 	// Configure routes
 	http.HandleFunc("/health", handlers.HealthCheck)
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
@@ -23,6 +37,14 @@ func main() {
 	})
 	http.HandleFunc("/ws/ticks", func(w http.ResponseWriter, r *http.Request) {
 		websocket.ServeTicksWs(ticksHub, w, r)
+	})
+	http.HandleFunc("/api/trade/buy", tradeHandler.Buy)
+	http.HandleFunc("/api/trade/sell", tradeHandler.Sell)
+	http.HandleFunc("/ws/trades", func(w http.ResponseWriter, r *http.Request) {
+		websocket.ServeAllTradesWs(tradeStatusHub, w, r)
+	})
+	http.HandleFunc("/ws/trade/", func(w http.ResponseWriter, r *http.Request) {
+		websocket.ServeSingleTradeWs(singleTradeHub, w, r)
 	})
 	
 	// Serve static files
