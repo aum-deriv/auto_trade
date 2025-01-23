@@ -9,6 +9,7 @@ import (
 	"github.com/aumbhatt/auto_trade/internal/handler"
 	"github.com/aumbhatt/auto_trade/internal/service"
 	"github.com/aumbhatt/auto_trade/internal/source/mock"
+	"github.com/aumbhatt/auto_trade/internal/store/memory"
 	"github.com/aumbhatt/auto_trade/internal/websocket"
 )
 
@@ -34,6 +35,20 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Create trade store and handlers
+	tradeStore := memory.NewInMemoryTradeStore()
+	openPositionsHandler := handler.NewOpenPositionsHandler(tradeStore, hub)
+	tradeHistoryHandler := handler.NewTradeHistoryHandler(tradeStore, hub)
+	tradeHandler := handler.NewTradeHandler(tradeStore, hub, openPositionsHandler, tradeHistoryHandler)
+
+	// Register trade message handlers
+	if err := registry.Register("open_positions", openPositionsHandler); err != nil {
+		log.Fatal(err)
+	}
+	if err := registry.Register("trade_history", tradeHistoryHandler); err != nil {
+		log.Fatal(err)
+	}
+
 	// Start all handlers
 	if err := registry.StartAll(); err != nil {
 		log.Fatal(err)
@@ -41,6 +56,10 @@ func main() {
 
 	// Initialize service with hub
 	svc := service.NewService(cfg, hub)
+
+	// Set up trade routes
+	http.HandleFunc("/api/trades/buy", tradeHandler.HandleBuy)
+	http.HandleFunc("/api/trades/sell", tradeHandler.HandleSell)
 
 	// Run the service
 	go func() {
