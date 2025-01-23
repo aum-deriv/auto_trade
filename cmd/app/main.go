@@ -10,6 +10,7 @@ import (
 	"github.com/aumbhatt/auto_trade/internal/service"
 	"github.com/aumbhatt/auto_trade/internal/source/mock"
 	"github.com/aumbhatt/auto_trade/internal/store/memory"
+	"github.com/aumbhatt/auto_trade/internal/strategy"
 	"github.com/aumbhatt/auto_trade/internal/websocket"
 )
 
@@ -41,11 +42,26 @@ func main() {
 	tradeHistoryHandler := handler.NewTradeHistoryHandler(tradeStore, hub)
 	tradeHandler := handler.NewTradeHandler(tradeStore, hub, openPositionsHandler, tradeHistoryHandler)
 
+	// Create strategy store and handlers
+	strategyStore := memory.NewInMemoryStrategyStore()
+	strategyRunner := strategy.NewDefaultRunner(strategyStore, tradeStore)
+	activeStrategiesHandler := handler.NewActiveStrategiesHandler(strategyStore, hub)
+	strategyHistoryHandler := handler.NewStrategyHistoryHandler(strategyStore, hub)
+	strategyHandler := handler.NewStrategyHandler(strategyStore, strategyRunner, mockSource, hub, activeStrategiesHandler, strategyHistoryHandler)
+
 	// Register trade message handlers
 	if err := registry.Register("open_positions", openPositionsHandler); err != nil {
 		log.Fatal(err)
 	}
 	if err := registry.Register("trade_history", tradeHistoryHandler); err != nil {
+		log.Fatal(err)
+	}
+
+	// Register strategy message handlers
+	if err := registry.Register("active_strategies", activeStrategiesHandler); err != nil {
+		log.Fatal(err)
+	}
+	if err := registry.Register("strategies_history", strategyHistoryHandler); err != nil {
 		log.Fatal(err)
 	}
 
@@ -57,9 +73,11 @@ func main() {
 	// Initialize service with hub
 	svc := service.NewService(cfg, hub)
 
-	// Set up trade routes
+	// Set up routes
 	http.HandleFunc("/api/trades/buy", tradeHandler.HandleBuy)
 	http.HandleFunc("/api/trades/sell", tradeHandler.HandleSell)
+	http.HandleFunc("/api/strategies/start", strategyHandler.HandleStart)
+	http.HandleFunc("/api/strategies/stop", strategyHandler.HandleStop)
 
 	// Run the service
 	go func() {
