@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aumbhatt/auto_trade/internal/models"
 	"github.com/aumbhatt/auto_trade/internal/source"
 	"github.com/aumbhatt/auto_trade/internal/websocket"
 )
@@ -74,22 +75,46 @@ Example Message Flow:
 
 // TickHandler handles tick message subscriptions and broadcasting
 type TickHandler struct {
-	hub        *websocket.Hub
-	source     source.TickSource
-	subs       map[string]struct{} // Map of subscribeID to empty struct (set implementation)
-	mutex      sync.RWMutex
-	done       chan struct{}
-	running    bool
-	tickDelay  time.Duration // Delay between ticks
+	hub              *websocket.Hub
+	source           source.TickSource
+	subs             map[string]struct{} // Map of subscribeID to empty struct (set implementation)
+	mutex            sync.RWMutex
+	done             chan struct{}
+	running          bool
+	tickDelay        time.Duration // Delay between ticks
+	strategyChannels map[string]chan *models.Tick // strategyID -> tick channel
+	strategyMutex    sync.RWMutex
 }
 
 // NewTickHandler creates a new TickHandler instance
 func NewTickHandler(hub *websocket.Hub, source source.TickSource) *TickHandler {
 	return &TickHandler{
-		hub:       hub,
-		source:    source,
-		subs:      make(map[string]struct{}),
-		tickDelay: time.Second, // Default to 1 second between ticks
+		hub:              hub,
+		source:           source,
+		subs:             make(map[string]struct{}),
+		tickDelay:        time.Second, // Default to 1 second between ticks
+		strategyChannels: make(map[string]chan *models.Tick),
+	}
+}
+
+// AddStrategy creates and returns a new tick channel for a strategy
+func (h *TickHandler) AddStrategy(strategyID string) chan *models.Tick {
+	h.strategyMutex.Lock()
+	defer h.strategyMutex.Unlock()
+
+	ch := make(chan *models.Tick)
+	h.strategyChannels[strategyID] = ch
+	return ch
+}
+
+// RemoveStrategy removes and closes a strategy's tick channel
+func (h *TickHandler) RemoveStrategy(strategyID string) {
+	h.strategyMutex.Lock()
+	defer h.strategyMutex.Unlock()
+
+	if ch, exists := h.strategyChannels[strategyID]; exists {
+		close(ch)
+		delete(h.strategyChannels, strategyID)
 	}
 }
 
@@ -156,10 +181,9 @@ func (h *TickHandler) processTick() {
 		return
 	}
 
-	// Only broadcast if there are subscribers
+	// Send to WebSocket subscribers
 	h.mutex.RLock()
 	if len(h.subs) > 0 {
-		// Send a separate message for each subscription
 		for subID := range h.subs {
 			msg := websocket.Message{
 				Type:        "ticks",
@@ -170,4 +194,14 @@ func (h *TickHandler) processTick() {
 		}
 	}
 	h.mutex.RUnlock()
+
+	// Send to strategies
+	h.strategyMutex.RLock()
+	for _, ch := range h.strategyChannels {
+		select {
+		case ch <- tick:
+		default: // Don't block if channel is full
+		}
+	}
+	h.strategyMutex.RUnlock()
 }

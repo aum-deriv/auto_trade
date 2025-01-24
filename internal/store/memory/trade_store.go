@@ -2,6 +2,7 @@ package memory
 
 import (
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -74,6 +75,7 @@ func (s *InMemoryTradeStore) CreateTrade(symbol string, entryPrice float64) (*mo
 	}
 
 	s.openTrades[trade.ID] = trade
+	log.Printf("Trade opened: %s", trade.ID)
 	return trade, nil
 }
 
@@ -106,6 +108,7 @@ func (s *InMemoryTradeStore) CloseTrade(id string) (*models.Trade, error) {
 	delete(s.openTrades, id)
 	s.tradeHistory[id] = trade
 
+	log.Printf("Trade closed: %s", trade.ID)
 	return trade, nil
 }
 

@@ -30,24 +30,26 @@ func main() {
 	hub := websocket.NewHub(registry)
 	go hub.Run()
 
+	// Create handlers
+	tradeStore := memory.NewInMemoryTradeStore()
+	strategyStore := memory.NewInMemoryStrategyStore()
+	strategyRunner := strategy.NewDefaultRunner(strategyStore, tradeStore)
+
 	// Create tick handler
 	tickHandler := handler.NewTickHandler(hub, mockSource)
 	if err := registry.Register("ticks", tickHandler); err != nil {
 		log.Fatal(err)
 	}
 
-	// Create trade store and handlers
-	tradeStore := memory.NewInMemoryTradeStore()
+	// Create trade handlers
 	openPositionsHandler := handler.NewOpenPositionsHandler(tradeStore, hub)
 	tradeHistoryHandler := handler.NewTradeHistoryHandler(tradeStore, hub)
 	tradeHandler := handler.NewTradeHandler(tradeStore, hub, openPositionsHandler, tradeHistoryHandler)
 
-	// Create strategy store and handlers
-	strategyStore := memory.NewInMemoryStrategyStore()
-	strategyRunner := strategy.NewDefaultRunner(strategyStore, tradeStore)
+	// Create strategy handlers
 	activeStrategiesHandler := handler.NewActiveStrategiesHandler(strategyStore, hub)
 	strategyHistoryHandler := handler.NewStrategyHistoryHandler(strategyStore, hub)
-	strategyHandler := handler.NewStrategyHandler(strategyStore, strategyRunner, mockSource, hub, activeStrategiesHandler, strategyHistoryHandler)
+	strategyHandler := handler.NewStrategyHandler(strategyStore, strategyRunner, tickHandler, hub, activeStrategiesHandler, strategyHistoryHandler)
 
 	// Register trade message handlers
 	if err := registry.Register("open_positions", openPositionsHandler); err != nil {

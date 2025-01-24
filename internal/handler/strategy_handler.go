@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"github.com/aumbhatt/auto_trade/internal/models"
-	"github.com/aumbhatt/auto_trade/internal/source"
 	"github.com/aumbhatt/auto_trade/internal/store"
 	"github.com/aumbhatt/auto_trade/internal/strategy"
 	"github.com/aumbhatt/auto_trade/internal/websocket"
@@ -161,18 +160,18 @@ Strategy Handler Flow and Structure:
 type StrategyHandler struct {
 	store                  store.StrategyStore
 	runner                 strategy.Runner
-	tickSource            source.TickSource
+	tickHandler           *TickHandler
 	hub                   *websocket.Hub
 	activeStrategiesHandler  *ActiveStrategiesHandler
 	strategyHistoryHandler   *StrategyHistoryHandler
 }
 
 // NewStrategyHandler creates a new StrategyHandler instance
-func NewStrategyHandler(store store.StrategyStore, runner strategy.Runner, tickSource source.TickSource, hub *websocket.Hub, activeStrategiesHandler *ActiveStrategiesHandler, strategyHistoryHandler *StrategyHistoryHandler) *StrategyHandler {
+func NewStrategyHandler(store store.StrategyStore, runner strategy.Runner, tickHandler *TickHandler, hub *websocket.Hub, activeStrategiesHandler *ActiveStrategiesHandler, strategyHistoryHandler *StrategyHistoryHandler) *StrategyHandler {
 	return &StrategyHandler{
 		store:                  store,
 		runner:                 runner,
-		tickSource:            tickSource,
+		tickHandler:           tickHandler,
 		hub:                   hub,
 		activeStrategiesHandler:  activeStrategiesHandler,
 		strategyHistoryHandler:   strategyHistoryHandler,
@@ -198,11 +197,12 @@ func (h *StrategyHandler) HandleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create tick channel for strategy
-	tickChan := make(chan *models.Tick)
+	// Get tick channel from TickHandler
+	tickChan := h.tickHandler.AddStrategy(strategy.ID)
 
 	// Start strategy
 	if err := h.runner.Start(strategy, tickChan); err != nil {
+		h.tickHandler.RemoveStrategy(strategy.ID)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -249,6 +249,9 @@ func (h *StrategyHandler) HandleStop(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// Remove strategy's tick channel
+	h.tickHandler.RemoveStrategy(strategy.ID)
 
 	// Broadcast updates
 	activeStrategies, _ := h.store.GetActiveStrategies()

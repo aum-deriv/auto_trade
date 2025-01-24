@@ -14,16 +14,14 @@ Repeat Strategy Flow and Structure:
    RepeatStrategy
    ├── runner: *DefaultRunner       // For executing trades
    ├── symbol: string              // Trading symbol
-   ├── entryPrice: float64        // Buy when price <= this
    ├── exitPrice: float64         // Sell when price >= this
    ├── currentTrade: *models.Trade // Track current position
    └── mu: sync.Mutex             // Protects currentTrade
 
 2. Operation Flow:
    a. No Position:
-      IF price <= entryPrice
-         Execute buy
-         Store trade ID
+      Execute buy at market price
+      Store trade ID
 
    b. Has Position:
       IF price >= exitPrice
@@ -34,7 +32,6 @@ Repeat Strategy Flow and Structure:
 3. Parameters:
    {
        "symbol": "AAPL",
-       "entry_price": 150.0,
        "exit_price": 155.0
    }
 
@@ -48,7 +45,6 @@ Repeat Strategy Flow and Structure:
 type RepeatStrategy struct {
 	runner       *DefaultRunner
 	symbol       string
-	entryPrice   float64
 	exitPrice    float64
 	currentTrade *models.Trade
 	mu           sync.Mutex
@@ -62,23 +58,16 @@ func NewRepeatStrategy(runner *DefaultRunner, params map[string]interface{}) (St
 		return nil, fmt.Errorf("invalid or missing symbol parameter")
 	}
 
-	// Extract and validate entry price
-	entryPrice, ok := params["entry_price"].(float64)
-	if !ok || entryPrice <= 0 {
-		return nil, fmt.Errorf("invalid or missing entry_price parameter")
-	}
-
 	// Extract and validate exit price
 	exitPrice, ok := params["exit_price"].(float64)
-	if !ok || exitPrice <= entryPrice {
-		return nil, fmt.Errorf("invalid or missing exit_price parameter (must be greater than entry_price)")
+	if !ok || exitPrice <= 0 {
+		return nil, fmt.Errorf("invalid or missing exit_price parameter")
 	}
 
 	return &RepeatStrategy{
-		runner:     runner,
-		symbol:     symbol,
-		entryPrice: entryPrice,
-		exitPrice:  exitPrice,
+		runner:    runner,
+		symbol:    symbol,
+		exitPrice: exitPrice,
 	}, nil
 }
 
@@ -92,8 +81,8 @@ func (s *RepeatStrategy) ProcessTick(tick *models.Tick) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Check for buy condition
-	if s.currentTrade == nil && tick.Price <= s.entryPrice {
+	// Enter trade immediately if no position
+	if s.currentTrade == nil {
 		trade, err := s.runner.executeBuy(s.symbol, tick.Price)
 		if err != nil {
 			return fmt.Errorf("failed to execute buy: %w", err)

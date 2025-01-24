@@ -2,6 +2,7 @@ package memory
 
 import (
 	"fmt"
+	"log"
 	"sync"
 
 	"github.com/aumbhatt/auto_trade/internal/models"
@@ -73,6 +74,7 @@ func (s *InMemoryStrategyStore) CreateStrategy(name string, params map[string]in
 
 	strategy := models.NewStrategy(name, params)
 	s.activeStrategies[strategy.ID] = strategy
+	log.Printf("Strategy created: %s", strategy.ID)
 	return strategy, nil
 }
 
@@ -103,6 +105,7 @@ func (s *InMemoryStrategyStore) StopStrategy(id string) (*models.Strategy, error
 	delete(s.activeStrategies, id)
 	s.strategyHistory[id] = strategy
 
+	log.Printf("Strategy stopped: %s", id)
 	return strategy, nil
 }
 
