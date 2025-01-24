@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"sync"
 
@@ -13,8 +14,27 @@ import (
 /*
 Trade Handler Flow and Examples:
 
-1. REST Endpoints:
+1. Components and Event Flow:
+   ├── TradeHandler: Main HTTP handler
+   ├── OpenPositionsHandler: WebSocket handler for open trades
+   └── TradeHistoryHandler: WebSocket handler for trade history
 
+   Event Processing:
+   a. Trade Creation:
+      1. HTTP request received
+      2. Trade created via store
+      3. Store emits TradeCreated event
+      4. OpenPositionsHandler receives event
+      5. Updates broadcast to WebSocket subscribers
+
+   b. Trade Closure:
+      1. HTTP request received
+      2. Trade closed via store
+      3. Store emits TradeClosed event
+      4. Both handlers receive event
+      5. Updates broadcast to WebSocket subscribers
+
+2. REST Endpoints:
    a. Buy Trade (POST /api/trades/buy):
       Request:
       {
@@ -58,8 +78,7 @@ Trade Handler Flow and Examples:
           "message": "Trade not found: trade-abc123"
       }
 
-2. WebSocket Messages:
-
+3. WebSocket Messages:
    a. Subscribe to Open Positions:
       Request:
       {
@@ -137,6 +156,10 @@ type TradeHandler struct {
 
 // NewTradeHandler creates a new TradeHandler instance
 func NewTradeHandler(store store.TradeStore, hub *websocket.Hub, openPosHandler *OpenPositionsHandler, tradeHistHandler *TradeHistoryHandler) *TradeHandler {
+	// Register handlers as trade event listeners
+	store.AddListener(openPosHandler)
+	store.AddListener(tradeHistHandler)
+
 	return &TradeHandler{
 		store:             store,
 		hub:              hub,
@@ -162,17 +185,6 @@ func (h *TradeHandler) HandleBuy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	// Broadcast update to open positions subscribers
-	openTrades, err := h.store.GetOpenTrades()
-	if err != nil {
-		// Log error but continue with response
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Broadcast to open positions subscribers
-	h.openPosHandler.BroadcastUpdate(openTrades)
 
 	json.NewEncoder(w).Encode(trade)
 }
@@ -200,27 +212,6 @@ func (h *TradeHandler) HandleSell(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Broadcast updates to subscribers
-	openTrades, err := h.store.GetOpenTrades()
-	if err != nil {
-		// Log error but continue
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Broadcast to open positions subscribers
-	h.openPosHandler.BroadcastUpdate(openTrades)
-
-	tradeHistory, err := h.store.GetTradeHistory()
-	if err != nil {
-		// Log error but continue
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Broadcast to trade history subscribers
-	h.tradeHistHandler.BroadcastUpdate(tradeHistory)
-
 	json.NewEncoder(w).Encode(trade)
 }
 
@@ -230,6 +221,7 @@ type OpenPositionsHandler struct {
 	hub   *websocket.Hub
 	// Track subscriptions
 	subscriptions sync.Map // map[string]struct{} // subscribeID -> struct{}
+	subMutex     sync.RWMutex // Protects subscription operations
 }
 
 // NewOpenPositionsHandler creates a new OpenPositionsHandler
@@ -240,10 +232,24 @@ func NewOpenPositionsHandler(store store.TradeStore, hub *websocket.Hub) *OpenPo
 	}
 }
 
+// OnTradeEvent implements store.TradeEventListener
+func (h *OpenPositionsHandler) OnTradeEvent(event store.TradeEvent) {
+	// Get updated open trades list
+	trades, err := h.store.GetOpenTrades()
+	if err != nil {
+		log.Printf("Error getting open trades: %v", err)
+		return
+	}
+
+	// Broadcast update to all subscribers
+	h.BroadcastUpdate(trades)
+}
+
 // HandleSubscribe handles subscription requests
 func (h *OpenPositionsHandler) HandleSubscribe(subscribeID string, options map[string]interface{}) error {
-	// Store subscription
+	h.subMutex.Lock()
 	h.subscriptions.Store(subscribeID, struct{}{})
+	h.subMutex.Unlock()
 
 	trades, err := h.store.GetOpenTrades()
 	if err != nil {
@@ -262,21 +268,31 @@ func (h *OpenPositionsHandler) HandleSubscribe(subscribeID string, options map[s
 
 // HandleUnsubscribe handles unsubscribe requests
 func (h *OpenPositionsHandler) HandleUnsubscribe(subscribeID string) error {
+	h.subMutex.Lock()
 	h.subscriptions.Delete(subscribeID)
+	h.subMutex.Unlock()
 	return nil
 }
 
 // BroadcastUpdate sends updates to all subscribers
 func (h *OpenPositionsHandler) BroadcastUpdate(trades []*models.Trade) {
+	// Collect subscribers under read lock
+	h.subMutex.RLock()
+	subscribers := make([]string, 0)
 	h.subscriptions.Range(func(key, value interface{}) bool {
-		subscribeID := key.(string)
+		subscribers = append(subscribers, key.(string))
+		return true
+	})
+	h.subMutex.RUnlock()
+
+	// Broadcast outside lock
+	for _, subscribeID := range subscribers {
 		h.hub.Broadcast(websocket.Message{
 			Type:        "open_positions",
 			SubscribeID: subscribeID,
 			Payload:     trades,
 		})
-		return true
-	})
+	}
 }
 
 // Start starts the handler
@@ -295,6 +311,7 @@ type TradeHistoryHandler struct {
 	hub   *websocket.Hub
 	// Track subscriptions
 	subscriptions sync.Map // map[string]struct{} // subscribeID -> struct{}
+	subMutex     sync.RWMutex // Protects subscription operations
 }
 
 // NewTradeHistoryHandler creates a new TradeHistoryHandler
@@ -305,10 +322,29 @@ func NewTradeHistoryHandler(store store.TradeStore, hub *websocket.Hub) *TradeHi
 	}
 }
 
+// OnTradeEvent implements store.TradeEventListener
+func (h *TradeHistoryHandler) OnTradeEvent(event store.TradeEvent) {
+	// Only process closed trades
+	if event.Type != store.TradeClosed {
+		return
+	}
+
+	// Get updated trade history
+	trades, err := h.store.GetTradeHistory()
+	if err != nil {
+		log.Printf("Error getting trade history: %v", err)
+		return
+	}
+
+	// Broadcast update to all subscribers
+	h.BroadcastUpdate(trades)
+}
+
 // HandleSubscribe handles subscription requests
 func (h *TradeHistoryHandler) HandleSubscribe(subscribeID string, options map[string]interface{}) error {
-	// Store subscription
+	h.subMutex.Lock()
 	h.subscriptions.Store(subscribeID, struct{}{})
+	h.subMutex.Unlock()
 
 	trades, err := h.store.GetTradeHistory()
 	if err != nil {
@@ -327,21 +363,31 @@ func (h *TradeHistoryHandler) HandleSubscribe(subscribeID string, options map[st
 
 // HandleUnsubscribe handles unsubscribe requests
 func (h *TradeHistoryHandler) HandleUnsubscribe(subscribeID string) error {
+	h.subMutex.Lock()
 	h.subscriptions.Delete(subscribeID)
+	h.subMutex.Unlock()
 	return nil
 }
 
 // BroadcastUpdate sends updates to all subscribers
 func (h *TradeHistoryHandler) BroadcastUpdate(trades []*models.Trade) {
+	// Collect subscribers under read lock
+	h.subMutex.RLock()
+	subscribers := make([]string, 0)
 	h.subscriptions.Range(func(key, value interface{}) bool {
-		subscribeID := key.(string)
+		subscribers = append(subscribers, key.(string))
+		return true
+	})
+	h.subMutex.RUnlock()
+
+	// Broadcast outside lock
+	for _, subscribeID := range subscribers {
 		h.hub.Broadcast(websocket.Message{
 			Type:        "trade_history",
 			SubscribeID: subscribeID,
 			Payload:     trades,
 		})
-		return true
-	})
+	}
 }
 
 // Start starts the handler

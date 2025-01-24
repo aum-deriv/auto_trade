@@ -25,39 +25,26 @@ Martingale Strategy Flow and Structure:
 
 2. Operation Flow:
    a. No Position:
-      - Set position size (base or doubled)
+      - Validate tick data
+      - Calculate position size
       - Execute buy at market price
       - Store trade ID
       - Increment position count
 
    b. Has Position:
-      IF price >= entry * (1 + takeProfit/100)
-         - Execute sell
-         - Reset position size to base
-         - Reset position count
-         - Clear trade ID
-      ELSE IF price < entry
-         - Execute sell (loss)
-         - IF positionCount < maxPositions
-            * Double position size
-         ELSE
-            * Reset to base position
-            * Reset position count
-         - Clear trade ID
+      - Validate current trade state
+      - Calculate take profit target
+      - Handle position exit:
+        * Take profit
+        * Stop loss
+        * Position sizing for next trade
 
-3. Parameters:
-   {
-       "symbol": "AAPL",
-       "base_position": 100.0,
-       "take_profit": 1.0,
-       "max_positions": 3
-   }
-
-4. Error Handling:
-   - Invalid parameters
-   - Trade execution errors
-   - Missing fields
-   - Position size validation
+3. Error Handling:
+   - Invalid tick data
+   - Zero/negative prices
+   - Trade execution failures
+   - Invalid trade state
+   - Position size limits
 */
 
 // MartingaleStrategy implements the Martingale trading strategy
@@ -110,11 +97,117 @@ func NewMartingaleStrategy(runner *DefaultRunner, params map[string]interface{})
 	}, nil
 }
 
+// validateTick checks if the tick data is valid
+func (s *MartingaleStrategy) validateTick(tick *models.Tick) error {
+	if tick == nil {
+		return fmt.Errorf("received nil tick")
+	}
+	if tick.Symbol != s.symbol {
+		return nil // Not an error, just ignore other symbols
+	}
+	if tick.Price <= 0 {
+		return fmt.Errorf("invalid tick price: %.2f", tick.Price)
+	}
+	return nil
+}
+
+// validateCurrentTrade checks if the current trade state is valid
+func (s *MartingaleStrategy) validateCurrentTrade() error {
+	if s.currentTrade == nil {
+		return fmt.Errorf("current trade is nil")
+	}
+	if s.currentTrade.EntryPrice <= 0 {
+		return fmt.Errorf("invalid entry price: %.2f", s.currentTrade.EntryPrice)
+	}
+	if !s.currentTrade.ExitTime.IsZero() {
+		return fmt.Errorf("trade already closed")
+	}
+	return nil
+}
+
+// resetPosition resets the strategy state
+func (s *MartingaleStrategy) resetPosition() {
+	s.currentTrade = nil
+	s.currentSize = s.basePosition
+	s.positionCount = 0
+}
+
+// enterPosition attempts to enter a new position
+func (s *MartingaleStrategy) enterPosition(tick *models.Tick) error {
+	// Safety check for position size
+	maxSize := s.basePosition
+	for i := 0; i < s.maxPositions; i++ {
+		maxSize *= 2
+	}
+	if s.currentSize > maxSize {
+		return fmt.Errorf("position size %.2f exceeds maximum allowed (max: %.2f)", s.currentSize, maxSize)
+	}
+
+	// Calculate quantity based on current position size
+	quantity := s.currentSize / tick.Price
+	if quantity <= 0 {
+		return fmt.Errorf("invalid quantity calculated: %.4f", quantity)
+	}
+
+	// Execute buy
+	trade, err := s.runner.executeBuy(s.symbol, tick.Price)
+	if err != nil {
+		return fmt.Errorf("failed to execute buy: %w", err)
+	}
+
+	s.currentTrade = trade
+	s.positionCount++
+	log.Printf("Opened position %d: Size=%.2f, Quantity=%.4f, Price=%.2f", 
+		s.positionCount, s.currentSize, quantity, tick.Price)
+	return nil
+}
+
+// handleTakeProfit handles take profit exit
+func (s *MartingaleStrategy) handleTakeProfit(tick *models.Tick) error {
+	if _, err := s.runner.executeSell(s.currentTrade.ID); err != nil {
+		return fmt.Errorf("failed to execute take profit sell: %w", err)
+	}
+
+	// Calculate profit
+	quantity := s.currentSize / s.currentTrade.EntryPrice
+	profit := (tick.Price - s.currentTrade.EntryPrice) * quantity
+	
+	// Reset for next cycle
+	s.resetPosition()
+	log.Printf("Take profit: Profit=%.2f", profit)
+	return nil
+}
+
+// handleLoss handles loss exit
+func (s *MartingaleStrategy) handleLoss(tick *models.Tick) error {
+	if _, err := s.runner.executeSell(s.currentTrade.ID); err != nil {
+		return fmt.Errorf("failed to execute loss sell: %w", err)
+	}
+
+	// Calculate loss
+	quantity := s.currentSize / s.currentTrade.EntryPrice
+	loss := (tick.Price - s.currentTrade.EntryPrice) * quantity
+
+	// Prepare next position size
+	if s.positionCount < s.maxPositions {
+		s.currentSize *= 2
+		log.Printf("Loss=%.2f, Doubling position size to %.2f", loss, s.currentSize)
+	} else {
+		s.currentSize = s.basePosition
+		s.positionCount = 0
+		log.Printf("Loss=%.2f, Max positions reached, resetting to base position %.2f", 
+			loss, s.basePosition)
+	}
+
+	s.currentTrade = nil
+	return nil
+}
+
 // ProcessTick implements the StrategyExecutor interface
 func (s *MartingaleStrategy) ProcessTick(tick *models.Tick) error {
-	// Ignore ticks for other symbols
-	if tick.Symbol != s.symbol {
-		return nil
+	// Validate tick
+	if err := s.validateTick(tick); err != nil {
+		return err
 	}
 
 	s.mu.Lock()
@@ -122,16 +215,13 @@ func (s *MartingaleStrategy) ProcessTick(tick *models.Tick) error {
 
 	// Enter new position if none exists
 	if s.currentTrade == nil {
-		// Calculate quantity based on current position size
-		quantity := s.currentSize / tick.Price
-		trade, err := s.runner.executeBuy(s.symbol, tick.Price)
-		if err != nil {
-			return fmt.Errorf("failed to execute buy: %w", err)
-		}
-		s.currentTrade = trade
-		s.positionCount++
-		log.Printf("Opened position %d: Size=%.2f, Quantity=%.4f, Price=%.2f", 
-			s.positionCount, s.currentSize, quantity, tick.Price)
+		return s.enterPosition(tick)
+	}
+
+	// Validate current trade
+	if err := s.validateCurrentTrade(); err != nil {
+		log.Printf("Invalid trade state, resetting: %v", err)
+		s.resetPosition()
 		return nil
 	}
 
@@ -141,46 +231,12 @@ func (s *MartingaleStrategy) ProcessTick(tick *models.Tick) error {
 
 	// Check for take profit
 	if tick.Price >= targetPrice {
-		_, err := s.runner.executeSell(s.currentTrade.ID)
-		if err != nil {
-			return fmt.Errorf("failed to execute take profit sell: %w", err)
-		}
-		// Calculate profit/loss
-		quantity := s.currentSize / s.currentTrade.EntryPrice
-		profit := (tick.Price - s.currentTrade.EntryPrice) * quantity
-		
-		// Reset for next cycle
-		s.currentTrade = nil
-		s.currentSize = s.basePosition
-		s.positionCount = 0
-		log.Printf("Take profit: Profit=%.2f", profit)
-		return nil
+		return s.handleTakeProfit(tick)
 	}
 
 	// Check for loss exit
 	if tick.Price < entryPrice {
-		_, err := s.runner.executeSell(s.currentTrade.ID)
-		if err != nil {
-			return fmt.Errorf("failed to execute loss sell: %w", err)
-		}
-		
-		// Calculate loss
-		quantity := s.currentSize / s.currentTrade.EntryPrice
-		loss := (tick.Price - s.currentTrade.EntryPrice) * quantity
-		
-		// Prepare next position size
-		if s.positionCount < s.maxPositions {
-			s.currentSize *= 2
-			log.Printf("Loss=%.2f, Doubling position size to %.2f", loss, s.currentSize)
-		} else {
-			s.currentSize = s.basePosition
-			s.positionCount = 0
-			log.Printf("Loss=%.2f, Max positions reached, resetting to base position %.2f", 
-				loss, s.basePosition)
-		}
-		
-		s.currentTrade = nil
-		return nil
+		return s.handleLoss(tick)
 	}
 
 	return nil

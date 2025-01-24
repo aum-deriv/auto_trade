@@ -1,7 +1,9 @@
 package strategy
 
 import (
+	"context"
 	"fmt"
+	"log"
 	"sync"
 
 	"github.com/aumbhatt/auto_trade/internal/models"
@@ -69,18 +71,25 @@ type Runner interface {
 
 // DefaultRunner implements the Runner interface
 type DefaultRunner struct {
-	store      store.StrategyStore
-	tradeStore store.TradeStore
-	runningJobs map[string]chan struct{} // strategy ID -> done channel
-	mu         sync.RWMutex
+	store       store.StrategyStore
+	tradeStore  store.TradeStore
+	runningJobs map[string]*runningJob // strategy ID -> running job info
+	mu          sync.RWMutex
+}
+
+// runningJob holds information about a running strategy
+type runningJob struct {
+	done    chan struct{}    // Signal to stop the strategy
+	errChan chan error       // Channel for executor errors
+	cancel  func()          // Cancel function for the context
 }
 
 // NewDefaultRunner creates a new DefaultRunner instance
 func NewDefaultRunner(strategyStore store.StrategyStore, tradeStore store.TradeStore) *DefaultRunner {
 	return &DefaultRunner{
-		store:      strategyStore,
-		tradeStore: tradeStore,
-		runningJobs: make(map[string]chan struct{}),
+		store:       strategyStore,
+		tradeStore:  tradeStore,
+		runningJobs: make(map[string]*runningJob),
 	}
 }
 
@@ -94,12 +103,27 @@ func (r *DefaultRunner) Start(strategy *models.Strategy, tickChan <-chan *models
 		return fmt.Errorf("strategy already running: %s", strategy.ID)
 	}
 
-	// Create done channel
-	done := make(chan struct{})
-	r.runningJobs[strategy.ID] = done
+	// Create running job with error channel
+	job := &runningJob{
+		done:    make(chan struct{}),
+		errChan: make(chan error, 1), // Buffered to prevent blocking
+	}
+
+	// Create context with cancel
+	ctx, cancel := context.WithCancel(context.Background())
+	job.cancel = cancel
+
+	r.runningJobs[strategy.ID] = job
 
 	// Start strategy in goroutine
-	go r.runStrategy(strategy, tickChan, done)
+	go func() {
+		r.runStrategy(ctx, strategy, tickChan, job)
+	}()
+
+	// Start error handler
+	go func() {
+		r.handleErrors(strategy.ID, job)
+	}()
 
 	return nil
 }
@@ -107,29 +131,69 @@ func (r *DefaultRunner) Start(strategy *models.Strategy, tickChan <-chan *models
 // Stop gracefully stops a running strategy
 func (r *DefaultRunner) Stop(strategy *models.Strategy) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	job, exists := r.runningJobs[strategy.ID]
+	r.mu.Unlock()
 
-	done, exists := r.runningJobs[strategy.ID]
 	if !exists {
 		return fmt.Errorf("strategy not running: %s", strategy.ID)
 	}
 
-	// Signal strategy to stop
-	close(done)
+	// Cancel context and signal strategy to stop
+	job.cancel()
+	close(job.done)
+
+	// Wait for error handler to finish
+	close(job.errChan)
+
+	r.mu.Lock()
 	delete(r.runningJobs, strategy.ID)
+	r.mu.Unlock()
 
 	// Update strategy status
 	_, err := r.store.StopStrategy(strategy.ID)
 	return err
 }
 
+// handleErrors handles errors from the strategy executor
+func (r *DefaultRunner) handleErrors(strategyID string, job *runningJob) {
+	for err := range job.errChan {
+		if err != nil {
+			// Log error
+			log.Printf("Strategy %s error: %v", strategyID, err)
+
+			// Stop strategy on critical errors
+			if isCriticalError(err) {
+				log.Printf("Stopping strategy %s due to critical error", strategyID)
+				r.mu.Lock()
+				if _, exists := r.runningJobs[strategyID]; exists {
+					job.cancel()
+					close(job.done)
+					delete(r.runningJobs, strategyID)
+					// Update strategy status
+					if _, err := r.store.StopStrategy(strategyID); err != nil {
+						log.Printf("Error stopping strategy %s: %v", strategyID, err)
+					}
+				}
+				r.mu.Unlock()
+				return
+			}
+		}
+	}
+}
+
+// isCriticalError determines if an error should stop the strategy
+func isCriticalError(err error) bool {
+	// Add logic to determine critical errors
+	// For now, treat all errors as non-critical
+	return false
+}
+
 // runStrategy executes the strategy logic
-func (r *DefaultRunner) runStrategy(strategy *models.Strategy, tickChan <-chan *models.Tick, done chan struct{}) {
+func (r *DefaultRunner) runStrategy(ctx context.Context, strategy *models.Strategy, tickChan <-chan *models.Tick, job *runningJob) {
 	// Create strategy executor
 	executor, err := GetDefaultRegistry().Create(strategy.Name, r, strategy.Parameters)
 	if err != nil {
-		// Log error but don't block - strategy will effectively be stopped
-		fmt.Printf("Failed to create strategy executor: %v\n", err)
+		job.errChan <- fmt.Errorf("failed to create strategy executor: %w", err)
 		return
 	}
 
@@ -138,10 +202,11 @@ func (r *DefaultRunner) runStrategy(strategy *models.Strategy, tickChan <-chan *
 		select {
 		case tick := <-tickChan:
 			if err := executor.ProcessTick(tick); err != nil {
-				// Log error but continue running
-				fmt.Printf("Strategy %s error: %v\n", strategy.ID, err)
+				job.errChan <- err
 			}
-		case <-done:
+		case <-ctx.Done():
+			return
+		case <-job.done:
 			return
 		}
 	}

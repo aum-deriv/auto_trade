@@ -1,18 +1,20 @@
 package store
 
-import (
-	"github.com/aumbhatt/auto_trade/internal/models"
-)
+import "github.com/aumbhatt/auto_trade/internal/models"
 
 /*
 Trade Store Interface and Flow:
 
 1. Interface Structure:
-   TradeStore
-   ├── CreateTrade(symbol string, entryPrice float64) (*Trade, error)
-   ├── CloseTrade(id string) (*Trade, error)
-   ├── GetOpenTrades() ([]*Trade, error)
-   └── GetTradeHistory() ([]*Trade, error)
+   TradeStore combines:
+   ├── Basic trade operations
+   │   ├── CreateTrade
+   │   ├── CloseTrade
+   │   ├── GetOpenTrades
+   │   └── GetTradeHistory
+   └── Event emission (from TradeEventEmitter)
+       ├── AddListener
+       └── RemoveListener
 
 2. Usage Flow:
    a. Create Trade:
@@ -20,14 +22,16 @@ Trade Store Interface and Flow:
       1. Generate trade ID
       2. Create trade object
       3. Store in open trades
-      4. Return trade
+      4. Emit trade created event
+      5. Return trade
 
    b. Close Trade:
       id → CloseTrade() → Trade
       1. Find trade in open trades
       2. Add exit details
       3. Move to trade history
-      4. Return updated trade
+      4. Emit trade closed event
+      5. Return updated trade
 
    c. Get Open Trades:
       GetOpenTrades() → []*Trade
@@ -44,8 +48,8 @@ Trade Store Interface and Flow:
    - Add batch operations
 */
 
-// TradeStore defines the interface for trade storage operations
-type TradeStore interface {
+// BasicTradeStore defines the core trade operations
+type BasicTradeStore interface {
 	// CreateTrade creates a new trade with given symbol and entry price
 	CreateTrade(symbol string, entryPrice float64) (*models.Trade, error)
 
@@ -57,4 +61,10 @@ type TradeStore interface {
 
 	// GetTradeHistory returns all closed trades
 	GetTradeHistory() ([]*models.Trade, error)
+}
+
+// TradeStore combines basic trade operations with event emission capabilities
+type TradeStore interface {
+	BasicTradeStore
+	TradeEventEmitter
 }
