@@ -3,6 +3,8 @@ package strategy
 import (
 	"fmt"
 	"sync"
+
+	"github.com/aumbhatt/auto_trade/internal/models"
 )
 
 /*
@@ -41,6 +43,7 @@ type StrategyFactory func(runner *DefaultRunner, params map[string]interface{}) 
 // Registry manages strategy types and their creation
 type Registry struct {
 	factories map[string]StrategyFactory
+	metadata  map[string]models.StrategyMetadata
 	mu        sync.RWMutex
 }
 
@@ -48,14 +51,28 @@ type Registry struct {
 func NewRegistry() *Registry {
 	return &Registry{
 		factories: make(map[string]StrategyFactory),
+		metadata:  make(map[string]models.StrategyMetadata),
 	}
 }
 
-// Register adds a new strategy type to the registry
-func (r *Registry) Register(name string, factory StrategyFactory) {
+// Register adds a new strategy type and its metadata to the registry
+func (r *Registry) Register(name string, factory StrategyFactory, metadata models.StrategyMetadata) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.factories[name] = factory
+	r.metadata[name] = metadata
+}
+
+// GetStrategyMetadata returns metadata for all registered strategies
+func (r *Registry) GetStrategyMetadata() []models.StrategyMetadata {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	metadata := make([]models.StrategyMetadata, 0, len(r.metadata))
+	for _, m := range r.metadata {
+		metadata = append(metadata, m)
+	}
+	return metadata
 }
 
 // Create creates a new strategy executor instance

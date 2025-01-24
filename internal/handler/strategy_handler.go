@@ -66,6 +66,38 @@ Strategy Handler Flow and Structure:
           "message": "Strategy not found: moving_average-abc123"
       }
 
+   c. Get Default Strategies (GET /api/strategies/default):
+      Success Response: (200 OK)
+      [
+          {
+              "name": "repeat",
+              "parameters": [
+                  {
+                      "name": "symbol",
+                      "type": "string",
+                      "required": true,
+                      "description": "Trading symbol (e.g. AAPL)"
+                  },
+                  {
+                      "name": "exit_price",
+                      "type": "number",
+                      "required": true,
+                      "description": "Price at which to sell and restart cycle"
+                  }
+              ],
+              "strategy_flow": [
+                  "1. Wait for no active position",
+                  "2. Enter trade immediately at market price",
+                  "3. Hold position until price reaches exit_price",
+                  "4. Sell position when price >= exit_price",
+                  "5. Return to step 1"
+              ]
+          }
+      ]
+
+      Error Response: (405 Method Not Allowed)
+      Method not allowed
+
 3. WebSocket Messages:
 
    a. Subscribe to Active Strategies:
@@ -397,4 +429,15 @@ func (h *StrategyHistoryHandler) Start() error {
 // Stop stops the handler
 func (h *StrategyHistoryHandler) Stop() error {
 	return nil // No cleanup needed
+}
+
+// HandleDefaultStrategies returns information about available strategies
+func (h *StrategyHandler) HandleDefaultStrategies(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	metadata := strategy.GetDefaultRegistry().GetStrategyMetadata()
+	json.NewEncoder(w).Encode(metadata)
 }

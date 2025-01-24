@@ -104,7 +104,33 @@ func (s *RepeatStrategy) ProcessTick(tick *models.Tick) error {
 	return nil
 }
 
+// Metadata for the repeat strategy
+var repeatMetadata = models.StrategyMetadata{
+	Name: "repeat",
+	Parameters: []models.ParameterInfo{
+		{
+			Name:        "symbol",
+			Type:        "string",
+			Required:    true,
+			Description: "Trading symbol (e.g. AAPL)",
+		},
+		{
+			Name:        "exit_price",
+			Type:        "number",
+			Required:    true,
+			Description: "Price at which to sell and restart cycle",
+		},
+	},
+	Flow: []string{
+		"1. Wait for no active position",
+		"2. Enter trade immediately at market price",
+		"3. Hold position until price reaches exit_price",
+		"4. Sell position when price >= exit_price",
+		"5. Return to step 1",
+	},
+}
+
 // init registers the repeat strategy with the registry
 func init() {
-	defaultRegistry.Register("repeat", NewRepeatStrategy)
+	defaultRegistry.Register("repeat", NewRepeatStrategy, repeatMetadata)
 }

@@ -80,6 +80,7 @@ func main() {
 	http.HandleFunc("/api/trades/sell", tradeHandler.HandleSell)
 	http.HandleFunc("/api/strategies/start", strategyHandler.HandleStart)
 	http.HandleFunc("/api/strategies/stop", strategyHandler.HandleStop)
+	http.HandleFunc("/api/strategies/default", strategyHandler.HandleDefaultStrategies)
 
 	// Run the service
 	go func() {
