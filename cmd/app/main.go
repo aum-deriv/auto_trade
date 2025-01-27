@@ -75,12 +75,18 @@ func main() {
 	// Initialize service with hub
 	svc := service.NewService(cfg, hub)
 
+	// Create router with CORS middleware
+	mux := http.NewServeMux()
+	
 	// Set up routes
-	http.HandleFunc("/api/trades/buy", tradeHandler.HandleBuy)
-	http.HandleFunc("/api/trades/sell", tradeHandler.HandleSell)
-	http.HandleFunc("/api/strategies/start", strategyHandler.HandleStart)
-	http.HandleFunc("/api/strategies/stop", strategyHandler.HandleStop)
-	http.HandleFunc("/api/strategies/default", strategyHandler.HandleDefaultStrategies)
+	mux.HandleFunc("/api/trades/buy", tradeHandler.HandleBuy)
+	mux.HandleFunc("/api/trades/sell", tradeHandler.HandleSell)
+	mux.HandleFunc("/api/strategies/start", strategyHandler.HandleStart)
+	mux.HandleFunc("/api/strategies/stop", strategyHandler.HandleStop)
+	mux.HandleFunc("/api/strategies/default", strategyHandler.HandleDefaultStrategies)
+	
+	// Set up WebSocket route (no CORS middleware needed as it's handled in upgrader)
+	mux.HandleFunc("/ws", websocket.HandleWebSocket(hub))
 
 	// Run the service
 	go func() {
@@ -89,13 +95,13 @@ func main() {
 		}
 	}()
 
-	// Set up WebSocket route
-	http.HandleFunc("/ws", websocket.HandleWebSocket(hub))
+	// Create handler chain with CORS middleware
+	handler := handler.CORSMiddleware(mux)
 
 	// Start HTTP server
 	serverAddr := fmt.Sprintf(":%d", cfg.Server.Port)
 	log.Printf("Server starting on %s", serverAddr)
-	if err := http.ListenAndServe(serverAddr, nil); err != nil {
+	if err := http.ListenAndServe(serverAddr, handler); err != nil {
 		log.Fatal("ListenAndServe: ", err)
 	}
 }
